@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "URL Parser"
         window.titlebarSeparatorStyle = .none
+        window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 720, height: 440)
         window.delegate = self
         window.setFrameAutosaveName("MainWindow")
@@ -77,6 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func button(_ title: String, _ action: Selector) -> NSButton {
         let button = FlatButton(title: title, target: self, action: action)
+        button.cell = PaddedButtonCell(textCell: title)
+        button.target = self; button.action = action
+        button.setButtonType(.momentaryPushIn)
         button.isBordered = false
         button.font = .systemFont(ofSize: 12, weight: .medium)
         button.contentTintColor = .labelColor

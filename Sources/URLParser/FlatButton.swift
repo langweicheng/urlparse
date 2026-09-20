@@ -5,6 +5,12 @@ final class FlatButton: NSButton {
     private var hoverArea: NSTrackingArea?
     private var hovered = false
 
+    override var intrinsicContentSize: NSSize {
+        var size = super.intrinsicContentSize
+        size.width += 20 // 10 pt breathing room on each side of the native content.
+        return size
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverArea { removeTrackingArea(hoverArea) }
@@ -29,5 +35,11 @@ final class FlatButton: NSButton {
             NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 4, yRadius: 4).fill()
         }
         super.draw(dirtyRect)
+    }
+}
+
+final class PaddedButtonCell: NSButtonCell {
+    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+        super.drawInterior(withFrame: cellFrame.insetBy(dx: 10, dy: 0), in: controlView)
     }
 }
