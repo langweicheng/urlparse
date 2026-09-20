@@ -48,6 +48,8 @@ These figures use `TASK_VM_INFO.phys_footprint`, not RSS, and are not memory lim
 
 [Raw results before optimization](docs/memory-before.txt) · [Raw results after optimization](docs/memory-after.txt). Run `./scripts/measure-memory.sh` to repeat the measurements.
 
+The current development source also supports editing the scheme, host, and path, including creating a URL from empty fields. It adds a flat toolbar and incremental text and syntax updates. The universal app is approximately 0.74 MiB; see the [measurement report (Chinese)](docs/optimization-2026-09-20.md) for timings and limitations. These changes are not included in the v1.0.0 download yet; build from source to use them.
+
 ## Installation
 
 1. Download `URL-Parser-1.0.0-macOS-universal.zip` from [GitHub Releases](https://github.com/langweicheng/urlparse/releases/latest).

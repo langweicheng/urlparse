@@ -5,14 +5,14 @@ APP_VERSION=$(cat VERSION)
 APP="$PWD/dist/URL Parser.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 if [[ "${1:-}" == "--universal" ]]; then
-  swift build -c release --arch arm64
-  swift build -c release --arch x86_64
-  ARM_BIN=$(swift build -c release --arch arm64 --show-bin-path)
-  INTEL_BIN=$(swift build -c release --arch x86_64 --show-bin-path)
+  swift build -c release -Xswiftc -Osize --arch arm64
+  swift build -c release -Xswiftc -Osize --arch x86_64
+  ARM_BIN=$(swift build -c release -Xswiftc -Osize --arch arm64 --show-bin-path)
+  INTEL_BIN=$(swift build -c release -Xswiftc -Osize --arch x86_64 --show-bin-path)
   lipo -create "$ARM_BIN/URLParser" "$INTEL_BIN/URLParser" -output "$APP/Contents/MacOS/URLParser"
 elif [[ -z "${1:-}" ]]; then
-  swift build -c release
-  BIN=$(swift build -c release --show-bin-path)
+  swift build -c release -Xswiftc -Osize
+  BIN=$(swift build -c release -Xswiftc -Osize --show-bin-path)
   cp "$BIN/URLParser" "$APP/Contents/MacOS/URLParser"
 else
   printf 'Usage: %s [--universal]\n' "$0" >&2
@@ -35,5 +35,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+strip -x "$APP/Contents/MacOS/URLParser"
 codesign --force --sign - "$APP"
 printf 'Built: %s\n' "$APP"

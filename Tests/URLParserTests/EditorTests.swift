@@ -101,6 +101,63 @@ final class EditorTests: XCTestCase {
         XCTAssertTrue(editor.componentFields.allSatisfy(\.isEnabled))
     }
 
+    func testIncrementalSyntaxMatchesFullHighlight() {
+        let view = JSONTextView()
+        let texts = [
+            #"{"a":"one","b":"two","c":null}"#,
+            #"{"a":"ONE","b":"two","c":null}"#,
+            #"{"a":"ONE x","b":"two","c":null}"#,
+            #"{"a":"ONE x","b":12,"c":null}"#,
+            #"{"a":"ONE x","b":true,"c":null}"#,
+            #"{"a":"ONE x","b":"two","c":null}"#,
+            #"{"b":"two","c":null}"#,
+            #"{"b":"two","c":null,"d":["中文","😀"]}"#,
+            #"{"b":"two","c":null,"d":["中文","😀"]"#,
+            "{", "", "{}", #"{"b":"two"}"#
+        ]
+        for text in texts {
+            view.replaceContent(with: text)
+            view.refreshSyntax()
+            let reference = JSONTextView()
+            reference.string = text
+            reference.refreshSyntax()
+            for position in 0..<(text as NSString).length {
+                let actual = view.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: position, effectiveRange: nil) as? NSColor
+                let expected = reference.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: position, effectiveRange: nil) as? NSColor
+                XCTAssertEqual(actual, expected, "position \(position) in \(text)")
+            }
+        }
+        // Direct user edits, including replacement without a length change.
+        view.textStorage?.replaceCharacters(in: NSRange(location: 6, length: 3), with: "NEW")
+        view.refreshSyntax()
+        XCTAssertNotNil(view.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: 7, effectiveRange: nil))
+    }
+
+    func testLazyLayoutCanScrollToLastLineAndBack() {
+        _ = NSApplication.shared
+        let app = AppDelegate()
+        let pane = app.pane("JSON", app.right)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = pane
+        pane.layoutSubtreeIfNeeded()
+        app.right.string = "{\n" + (0..<1000).map { "\"key\($0)\":\"value\($0)\"" }.joined(separator: ",\n") + "\n}"
+        app.right.refreshSyntax()
+        let layout = app.right.layoutManager!
+        XCTAssertTrue(layout.allowsNonContiguousLayout)
+        for offset in [(app.right.string as NSString).length - 2, 0] {
+            let range = NSRange(location: offset, length: 1)
+            app.right.scrollRangeToVisible(range)
+            layout.ensureLayout(forCharacterRange: range)
+            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            var rect = layout.boundingRect(forGlyphRange: glyphs, in: app.right.textContainer!)
+            rect.origin.x += app.right.textContainerOrigin.x
+            rect.origin.y += app.right.textContainerOrigin.y
+            XCTAssertTrue(app.right.visibleRect.intersects(rect), "Could not scroll to \(offset)")
+        }
+        window.close()
+    }
+
     func testSplitDefaultsAndRestoresRatio() {
         let name = "URLParserTests.\(UUID().uuidString)"
         let preferences = UserDefaults(suiteName: name)!

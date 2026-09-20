@@ -1,40 +1,90 @@
 import AppKit
 import URLCore
 
-final class JSONTextView: NSTextView {
+final class JSONTextView: NSTextView, NSTextStorageDelegate {
+    private var previousLength = 0
+    private var needsFullHighlight = true
+    private var editedStart: Int?
+    private var editedEnd = 0
     private var index = JSONIndex("")
     private var highlighted: NSRange?
     private var menuTarget: (field: JSONIndex.Field, key: Bool)?
     private static func color(_ hex: Int) -> NSColor {
         NSColor(srgbRed: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: 1)
     }
+    private static let keyColor = color(0x660E7A)
+    private static let stringColor = color(0x008000)
+    private static let numberColor = color(0x0000FF)
+    private static let literalColor = color(0x000080)
+    private static let pairColor = color(0xFFFAE3)
+
     convenience init() {
         let storage = NSTextStorage(), layout = NSLayoutManager()
+        layout.allowsNonContiguousLayout = true
         let container = NSTextContainer(size: NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude))
         storage.addLayoutManager(layout); layout.addTextContainer(container)
         self.init(frame: .zero, textContainer: container)
+        storage.delegate = self
+        backgroundColor = .white; textColor = .black; insertionPointColor = .black
+        selectedTextAttributes = [.backgroundColor: Self.color(0x5974AB), .foregroundColor: NSColor.white]
+    }
+
+    func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions, range editedRange: NSRange, changeInLength delta: Int) {
+        guard editedMask.contains(.editedCharacters) else { return }
+        if editedStart != nil || (editedRange.location == 0 && editedRange.length == textStorage.length) {
+            needsFullHighlight = true
+        }
+        editedStart = min(editedStart ?? editedRange.location, editedRange.location)
+        editedEnd = NSMaxRange(editedRange)
     }
 
     func refreshSyntax() {
-        index = JSONIndex(string)
-        highlighted = nil
-        let all = NSRange(location: 0, length: (string as NSString).length)
+        let next = JSONIndex(string)
+        let length = (string as NSString).length
         guard let layoutManager else { return }
-        backgroundColor = .white; textColor = .black; insertionPointColor = .black
-        selectedTextAttributes = [.backgroundColor: Self.color(0x5974AB), .foregroundColor: NSColor.white]
-        layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: all)
+        let all = NSRange(location: 0, length: length)
         layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: all)
-        for token in index.tokens {
+        highlighted = nil
+        var first = 0
+        var end = next.tokens.count
+        if !needsFullHighlight {
+            while first < min(index.tokens.count, next.tokens.count),
+                  NSMaxRange(next.tokens[first].range) <= (editedStart ?? 0),
+                  index.tokens[first].kind == next.tokens[first].kind,
+                  index.tokens[first].range == next.tokens[first].range { first += 1 }
+            var oldEnd = index.tokens.count
+            let delta = length - previousLength
+            while end > first, oldEnd > first {
+                let old = index.tokens[oldEnd - 1], new = next.tokens[end - 1]
+                guard new.range.location >= editedEnd,
+                      old.kind == new.kind, old.range.length == new.range.length,
+                      old.range.location + delta == new.range.location else { break }
+                oldEnd -= 1; end -= 1
+            }
+        }
+        // Include neighboring tokens: insertions at their boundaries may inherit
+        // a color from the preceding token through TextKit.
+        let startToken = max(0, first - 1)
+        let endToken = min(next.tokens.count, end + 1)
+        let start = startToken < next.tokens.count ? next.tokens[startToken].range.location : 0
+        let finish = endToken > 0 ? NSMaxRange(next.tokens[endToken - 1].range) : length
+        let dirty = NSRange(location: start, length: max(0, finish - start))
+        layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: dirty)
+        for token in next.tokens[startToken..<endToken] {
             let color: NSColor
             switch token.kind {
-            case .key: color = Self.color(0x660E7A)
-            case .string: color = Self.color(0x008000)
-            case .number: color = Self.color(0x0000FF)
-            case .literal: color = Self.color(0x000080)
+            case .key: color = Self.keyColor
+            case .string: color = Self.stringColor
+            case .number: color = Self.numberColor
+            case .literal: color = Self.literalColor
             case .punctuation: continue
             }
             layoutManager.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: token.range)
         }
+        index = next
+        previousLength = length
+        needsFullHighlight = false
+        editedStart = nil; editedEnd = 0
         refreshSelectionHighlight()
     }
 
@@ -45,7 +95,7 @@ final class JSONTextView: NSTextView {
         highlighted = nil
         guard let field = index.field(at: selectedRange().location), NSMaxRange(field.range) <= (string as NSString).length else { return }
         highlighted = field.range
-        layoutManager?.addTemporaryAttribute(.backgroundColor, value: Self.color(0xFFFAE3), forCharacterRange: field.range)
+        layoutManager?.addTemporaryAttribute(.backgroundColor, value: Self.pairColor, forCharacterRange: field.range)
     }
 
     override func mouseDown(with event: NSEvent) {

@@ -48,6 +48,8 @@
 
 [优化前原始记录](docs/memory-before.txt) · [优化后原始记录](docs/memory-after.txt)。可运行 `./scripts/measure-memory.sh` 复测。
 
+当前源码开发版还支持直接编辑协议、Host 和路径（空白状态也可创建 URL），并更新了扁平工具栏和局部文本／配色刷新。通用应用约 0.74 MiB；编辑耗时及测量限制见[本次优化记录](docs/optimization-2026-09-20.md)。这些更新尚未包含在 v1.0.0 下载包中，可从源码构建。
+
 ## 安装
 
 1. 从 [GitHub Releases](https://github.com/langweicheng/urlparse/releases/latest) 下载 `URL-Parser-1.0.0-macOS-universal.zip`。

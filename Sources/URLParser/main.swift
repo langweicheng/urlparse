@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     static func makeEditor() -> NSTextView {
         let storage = NSTextStorage()
         let layout = NSLayoutManager()
+        layout.allowsNonContiguousLayout = true
         let container = NSTextContainer(size: NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude))
         storage.addLayoutManager(layout)
         layout.addTextContainer(container)
@@ -34,7 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         window.delegate = self
         window.setFrameAutosaveName("MainWindow")
         let root = NSStackView()
-        root.orientation = .vertical; root.spacing = 10
+        root.orientation = .vertical; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         let bar = NSStackView(views: [button("粘贴 URL", #selector(pasteURL)), button("复制 URL", #selector(copyURL)), button("复制 JSON", #selector(copyJSON)), button("清空", #selector(clear)), button("撤销", #selector(undoEdit)), button("重做", #selector(redoEdit)), button("生成二维码", #selector(showQR))])
         bar.spacing = 8
@@ -42,21 +43,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let split = PersistentSplitView(frame: .zero)
         split.isVertical = true; split.dividerStyle = .thin
         split.addArrangedSubview(pane("URL", left))
-        split.addArrangedSubview(pane("解码后的 Query JSON（可编辑）", right))
-        root.addArrangedSubview(split)
+        split.addArrangedSubview(pane("Query JSON · 可编辑", right))
         let fields = NSStackView()
         fields.spacing = 8
         for (title, field) in zip(["协议", "Host", "路径"], componentFields) {
             field.delegate = self
             field.placeholderString = title
             field.setAccessibilityLabel(title)
+            field.bezelStyle = .squareBezel
+            field.focusRingType = .none
             field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
             fields.addArrangedSubview(NSTextField(labelWithString: title))
             fields.addArrangedSubview(field)
         }
         schemeField.widthAnchor.constraint(equalToConstant: 90).isActive = true
         hostField.widthAnchor.constraint(equalTo: pathField.widthAnchor, multiplier: 0.7).isActive = true
-        root.addArrangedSubview(fields); root.addArrangedSubview(status)
+        root.addArrangedSubview(fields)
+        root.addArrangedSubview(split)
+        root.addArrangedSubview(status)
         status.font = .systemFont(ofSize: 12)
         window.contentView = root
         for v in [bar, split, fields, status] { v.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true }
@@ -70,7 +74,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func button(_ title: String, _ action: Selector) -> NSButton { NSButton(title: title, target: self, action: action) }
+    func button(_ title: String, _ action: Selector) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        button.isBordered = false
+        button.font = .systemFont(ofSize: 12, weight: .medium)
+        button.contentTintColor = .labelColor
+        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        let symbols = ["粘贴 URL": "doc.on.clipboard", "复制 URL": "link", "复制 JSON": "curlybraces", "清空": "trash", "撤销": "arrow.uturn.backward", "重做": "arrow.uturn.forward", "生成二维码": "qrcode"]
+        if let symbol = symbols[title] {
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+            button.imagePosition = .imageLeading
+        }
+        return button
+    }
     func pane(_ title: String, _ editor: NSTextView) -> NSView {
         editor.isRichText = false; editor.isAutomaticQuoteSubstitutionEnabled = false
         editor.isAutomaticDashSubstitutionEnabled = false; editor.isAutomaticTextReplacementEnabled = false
@@ -89,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         editor.autoresizingMask = [.width]; editor.textContainer?.widthTracksTextView = true
         editor.textContainer?.containerSize = NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude)
         editor.delegate = self; editor.allowsUndo = false
-        let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
+        let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .lineBorder
         // Keep backing storage viewport-sized instead of allocating a layer for the entire document.
         scroll.wantsLayer = true
         scroll.canDrawSubviewsIntoLayer = true
@@ -138,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func restore(urlPatch: TextPatch, jsonPatch: TextPatch, componentPatches: [TextPatch], reversed: Bool) {
         history.registerUndo(withTarget: self) { $0.restore(urlPatch: urlPatch, jsonPatch: jsonPatch, componentPatches: componentPatches, reversed: !reversed) }
         let restored = State(url: urlPatch.apply(to: state.url, reversed: reversed), json: jsonPatch.apply(to: state.json, reversed: reversed), components: zip(componentPatches, state.components).map { $0.0.apply(to: $0.1, reversed: reversed) })
-        changing = true; left.string = restored.url; right.string = restored.json; changing = false
+        changing = true; left.replaceContent(with: restored.url); right.replaceContent(with: restored.json); changing = false
         state = restored; document = try? URLDocument(restored.url)
         right.refreshSyntax()
         for (field, value) in zip(componentFields, restored.components) { field.stringValue = value }
@@ -170,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                 url = (try? draft.applying(json: right.string)) ?? draft.original
             }
             self.document = try URLDocument(url)
-            changing = true; left.string = url; changing = false
+            changing = true; left.replaceContent(with: url); changing = false
             updateStatus(validate: true)
             validateComponentDrafts()
         } catch {
@@ -203,14 +219,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         do {
             if fromLeft {
                 if left.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    document = nil; right.string = "{}"; status.stringValue = "请输入 URL"; return
+                    document = nil; right.replaceContent(with: "{}"); status.stringValue = "请输入 URL"; return
                 }
                 let parsed = try URLDocument(left.string)
-                document = parsed; right.string = parsed.json
+                document = parsed; right.replaceContent(with: parsed.json)
             } else {
                 guard let document else { throw Failure("请先在左侧输入有效 URL") }
                 let url = try document.applying(json: right.string)
-                left.string = url; self.document = try URLDocument(url)
+                left.replaceContent(with: url); self.document = try URLDocument(url)
                 shouldRefreshComponents = true
             }
             updateStatus()
@@ -221,7 +237,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
     func updateStatus(validate: Bool = false) {
         status.textColor = .secondaryLabelColor
-        status.stringValue = "已同步 · 重复参数用数组；null 表示无等号参数；+ 按字面保留；百分号解码一层。"
+        status.stringValue = "已同步"
+        status.toolTip = "重复参数用数组；null 表示无等号参数；+ 按字面保留；百分号解码一层。"
         if let document {
             if validate {
                 do { _ = try document.applying(json: right.string) }
