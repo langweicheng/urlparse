@@ -61,7 +61,10 @@ public struct JSONIndex {
                     end = NSMaxRange(token.range); t += 1
                 }
                 let hasComma = t < tokens.count && chars[tokens[t].range.location] == 44
-                let deleteStart = hasComma ? key.location : (precedingComma ?? key.location)
+                // Include whitespace before the field, retaining the following
+                // field's indentation (or the closing brace's newline).
+                let beforeField = precedingComma.map { $0 + 1 } ?? NSMaxRange(tokens[0].range)
+                let deleteStart = hasComma ? beforeField : (precedingComma ?? beforeField)
                 let deleteEnd = hasComma ? NSMaxRange(tokens[t].range) : end
                 fields.append(Field(key: key, value: NSRange(location: start, length: end - start), deletion: NSRange(location: deleteStart, length: deleteEnd - deleteStart)))
                 if hasComma { precedingComma = tokens[t].range.location; t += 1 } else { break }

@@ -24,6 +24,27 @@ final class JSONIndexTests: XCTestCase {
             }
         }
     }
+    func testParameterDeletionDoesNotLeaveBlankLines() throws {
+        for newline in ["\n", "\r\n"] {
+            let lines = ["{", "  \"a\": \"1\",", "  \"b\": [", "    \"x\",", "    null", "  ],", "  \"c\": \"3\"", "}"]
+            let text = lines.joined(separator: newline)
+            let expected = [
+                ["{", "  \"b\": [", "    \"x\",", "    null", "  ],", "  \"c\": \"3\"", "}"],
+                ["{", "  \"a\": \"1\",", "  \"c\": \"3\"", "}"],
+                ["{", "  \"a\": \"1\",", "  \"b\": [", "    \"x\",", "    null", "  ]", "}"]
+            ]
+            for (index, field) in JSONIndex(text).fields.enumerated() {
+                let result = (text as NSString).replacingCharacters(in: field.deletion, with: "")
+                XCTAssertEqual(result, expected[index].joined(separator: newline))
+                XCTAssertNoThrow(try JSONSerialization.jsonObject(with: Data(result.utf8)))
+                XCTAssertEqual(TextPatch(from: text, to: result).apply(to: result, reversed: true), text)
+            }
+            let only = ["{", "  \"a\": \"1\"", "}"].joined(separator: newline)
+            let field = try XCTUnwrap(JSONIndex(only).fields.first)
+            XCTAssertEqual((only as NSString).replacingCharacters(in: field.deletion, with: ""), "{" + newline + "}")
+        }
+    }
+
     func testClearValuePreservesKeyAndOtherFields() throws {
         let text = #"{"flag":null,"tags":["a","b"],"city":"北京"}"#
         for field in JSONIndex(text).fields {
