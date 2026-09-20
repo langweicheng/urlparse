@@ -1,0 +1,194 @@
+import AppKit
+import URLCore
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextViewDelegate {
+    var window: NSWindow!
+    let left = AppDelegate.makeEditor()
+    let right = JSONTextView()
+    static func makeEditor() -> NSTextView {
+        let storage = NSTextStorage()
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude))
+        storage.addLayoutManager(layout)
+        layout.addTextContainer(container)
+        return NSTextView(frame: .zero, textContainer: container)
+    }
+    let info = NSTextField(wrappingLabelWithString: "")
+    let status = NSTextField(wrappingLabelWithString: "输入 URL 后自动解析；右侧修改有效 JSON 后立即同步。")
+    let history = UndoManager()
+    var document: URLDocument?
+    var changing = false
+    struct State { let url: String; let json: String }
+    var state = State(url: "", json: "{}")
+    var qrWindow: NSWindow?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        history.levelsOfUndo = 100
+        makeMenu()
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.title = "URL Parser"
+        window.minSize = NSSize(width: 720, height: 440)
+        window.delegate = self
+        window.setFrameAutosaveName("MainWindow")
+        let root = NSStackView()
+        root.orientation = .vertical; root.spacing = 10
+        root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        let bar = NSStackView(views: [button("粘贴 URL", #selector(pasteURL)), button("复制 URL", #selector(copyURL)), button("复制 JSON", #selector(copyJSON)), button("清空", #selector(clear)), button("撤销", #selector(undoEdit)), button("重做", #selector(redoEdit)), button("生成二维码", #selector(showQR))])
+        bar.spacing = 8
+        root.addArrangedSubview(bar)
+        let split = PersistentSplitView(frame: .zero)
+        split.isVertical = true; split.dividerStyle = .thin
+        split.addArrangedSubview(pane("URL", left))
+        split.addArrangedSubview(pane("解码后的 Query JSON（可编辑）", right))
+        root.addArrangedSubview(split)
+        root.addArrangedSubview(info); root.addArrangedSubview(status)
+        info.font = .systemFont(ofSize: 12); info.textColor = .secondaryLabelColor
+        status.font = .systemFont(ofSize: 12)
+        window.contentView = root
+        for v in [bar, split, info, status] { v.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true }
+        split.heightAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
+        right.string = "{}"
+        right.refreshSyntax()
+        window.center(); window.makeKeyAndOrderFront(nil)
+        root.layoutSubtreeIfNeeded()
+        split.restorePosition()
+        window.makeFirstResponder(left)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func button(_ title: String, _ action: Selector) -> NSButton { NSButton(title: title, target: self, action: action) }
+    func pane(_ title: String, _ editor: NSTextView) -> NSView {
+        editor.isRichText = false; editor.isAutomaticQuoteSubstitutionEnabled = false
+        editor.isAutomaticDashSubstitutionEnabled = false; editor.isAutomaticTextReplacementEnabled = false
+        editor.isAutomaticSpellingCorrectionEnabled = false; editor.isContinuousSpellCheckingEnabled = false
+        editor.isGrammarCheckingEnabled = false
+        editor.isAutomaticTextCompletionEnabled = false
+        editor.isAutomaticLinkDetectionEnabled = false
+        editor.isAutomaticDataDetectionEnabled = false
+        if #available(macOS 14.0, *) { editor.inlinePredictionType = .no }
+        if #available(macOS 15.0, *) { editor.writingToolsBehavior = .none }
+        editor.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        editor.textContainerInset = NSSize(width: 8, height: 8)
+        editor.minSize = .zero
+        editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        editor.isVerticallyResizable = true; editor.isHorizontallyResizable = false
+        editor.autoresizingMask = [.width]; editor.textContainer?.widthTracksTextView = true
+        editor.textContainer?.containerSize = NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude)
+        editor.delegate = self; editor.allowsUndo = false
+        let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
+        // Keep backing storage viewport-sized instead of allocating a layer for the entire document.
+        scroll.wantsLayer = true
+        scroll.canDrawSubviewsIntoLayer = true
+        editor.wantsLayer = false
+        scroll.documentView = editor
+        let stack = NSStackView(views: [NSTextField(labelWithString: title), scroll])
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 6
+        scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
+        return stack
+    }
+
+    func makeMenu() {
+        let menu = NSMenu()
+        let app = NSMenuItem(); menu.addItem(app); app.submenu = NSMenu()
+        app.submenu?.addItem(withTitle: "退出 URL Parser", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let edit = NSMenuItem(); edit.title = "编辑"; edit.submenu = NSMenu(title: "编辑"); menu.addItem(edit)
+        let undo = edit.submenu!.addItem(withTitle: "撤销", action: #selector(undoEdit), keyEquivalent: "z"); undo.target = self
+        let redo = edit.submenu!.addItem(withTitle: "重做", action: #selector(redoEdit), keyEquivalent: "z"); redo.keyEquivalentModifierMask = [.command, .shift]; redo.target = self
+        edit.submenu?.addItem(.separator())
+        for (title, selector, key) in [("剪切", #selector(NSText.cut(_:)), "x"), ("复制", #selector(NSText.copy(_:)), "c"), ("粘贴", #selector(NSText.paste(_:)), "v"), ("全选", #selector(NSText.selectAll(_:)), "a")] {
+            edit.submenu?.addItem(withTitle: title, action: selector, keyEquivalent: key)
+        }
+        NSApp.mainMenu = menu
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        guard !changing, (notification.object as? NSTextView) === right else { return }
+        right.refreshSelectionHighlight()
+    }
+    func textDidChange(_ notification: Notification) {
+        guard !changing else { return }
+        let previous = state
+        synchronize(fromLeft: (notification.object as? NSTextView) === left)
+        right.refreshSyntax()
+        state = State(url: left.string, json: right.string)
+        let urlPatch = TextPatch(from: previous.url, to: state.url)
+        let jsonPatch = TextPatch(from: previous.json, to: state.json)
+        history.registerUndo(withTarget: self) { $0.restore(urlPatch: urlPatch, jsonPatch: jsonPatch, reversed: true) }
+        history.setActionName("编辑")
+    }
+    func restore(urlPatch: TextPatch, jsonPatch: TextPatch, reversed: Bool) {
+        history.registerUndo(withTarget: self) { $0.restore(urlPatch: urlPatch, jsonPatch: jsonPatch, reversed: !reversed) }
+        let restored = State(url: urlPatch.apply(to: state.url, reversed: reversed), json: jsonPatch.apply(to: state.json, reversed: reversed))
+        changing = true; left.string = restored.url; right.string = restored.json; changing = false
+        state = restored; document = try? URLDocument(restored.url)
+        right.refreshSyntax()
+        updateStatus(validate: true)
+    }
+    func synchronize(fromLeft: Bool) {
+        changing = true; defer { changing = false }
+        do {
+            if fromLeft {
+                if left.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    document = nil; right.string = "{}"; info.stringValue = ""; status.stringValue = "请输入 URL"; return
+                }
+                let parsed = try URLDocument(left.string)
+                document = parsed; right.string = parsed.json
+            } else {
+                guard let document else { throw Failure("请先在左侧输入有效 URL") }
+                let url = try document.applying(json: right.string)
+                left.string = url; self.document = try URLDocument(url)
+            }
+            updateStatus()
+        } catch {
+            if fromLeft { document = nil; info.stringValue = "" }
+            status.textColor = .systemRed; status.stringValue = "未同步：" + error.localizedDescription
+        }
+    }
+    func updateStatus(validate: Bool = false) {
+        info.stringValue = document?.summary ?? ""
+        status.textColor = .secondaryLabelColor
+        status.stringValue = "已同步 · 重复参数用数组；null 表示无等号参数；+ 按字面保留；百分号解码一层。"
+        if let document {
+            if validate {
+                do { _ = try document.applying(json: right.string) }
+                catch { status.textColor = .systemRed; status.stringValue = "未同步：" + error.localizedDescription }
+            }
+        } else { status.stringValue = left.string.isEmpty ? "请输入 URL" : "URL 无效，未同步" }
+    }
+    @objc func undoEdit() { history.undo() }
+    @objc func redoEdit() { history.redo() }
+    @objc func pasteURL() {
+        guard let text = NSPasteboard.general.string(forType: .string) else { return }
+        left.string = text; textDidChange(Notification(name: NSText.didChangeNotification, object: left))
+    }
+    func copy(_ string: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(string, forType: .string) }
+    @objc func copyURL() { copy(left.string) }
+    @objc func copyJSON() { copy(right.string) }
+    @objc func clear() { left.string = ""; textDidChange(Notification(name: NSText.didChangeNotification, object: left)) }
+
+    @objc func showQR() {
+        let text = left.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cg: CGImage
+        do { cg = try QRCode.image(for: text) }
+        catch { status.textColor = .systemRed; status.stringValue = error.localizedDescription; return }
+        let image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        let view = NSImageView(); view.image = image; view.imageScaling = .scaleNone
+        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 480), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        panel.delegate = self
+        panel.isReleasedWhenClosed = false; panel.title = "当前 URL 二维码（\(text.utf8.count) 字节）"
+        panel.contentView = view; qrWindow?.close(); qrWindow = panel
+        panel.center(); panel.makeKeyAndOrderFront(nil)
+    }
+    func windowWillClose(_ notification: Notification) {
+        guard let closing = notification.object as? NSWindow, closing === qrWindow else { return }
+        closing.contentView = nil
+        qrWindow = nil
+    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+}
+let app = NSApplication.shared
+app.setActivationPolicy(.regular)
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()

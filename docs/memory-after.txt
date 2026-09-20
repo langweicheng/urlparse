@@ -1,0 +1,13 @@
+Run 1
+MEMORY empty rss=108642304 footprint=33244096
+MEMORY 1000_parameters rss=113917952 footprint=44516384
+MEMORY 100_edits rss=115015680 footprint=49300512
+MEMORY qr_open rss=119734272 footprint=53232672
+MEMORY qr_closed rss=116621312 footprint=52282400
+
+Run 2
+MEMORY empty rss=103972864 footprint=32900056
+MEMORY 1000_parameters rss=103514112 footprint=43385864
+MEMORY 100_edits rss=104513536 footprint=48284680
+MEMORY qr_open rss=111968256 footprint=53134392
+MEMORY qr_closed rss=107200512 footprint=52003848
