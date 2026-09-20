@@ -17,7 +17,7 @@ URL Parser 的首个 macOS 原生版本，Swift + AppKit，无第三方运行时
 - 系统：macOS 13 或以上。
 - 架构：Apple Silicon（arm64）和 Intel（x86_64），同一安装包。
 - 签名：ad-hoc 本地签名，未进行 Apple Developer ID 签名或公证。若首次打开被系统拦截，可在确认来源后到「系统设置 → 隐私与安全性」选择「仍要打开」。
-- 校验：下载同版本 SHA256SUMS.txt，在两个下载文件所在目录执行 `shasum -a 256 -c SHA256SUMS.txt`。
+- SHA-256：`7592fb77761d7108c4d95ac0139707aad876bf751d1ce1318989345d17d51049`。
 
 ### 验证与限制
 
