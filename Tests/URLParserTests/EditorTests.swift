@@ -3,6 +3,62 @@ import AppKit
 @testable import URLParser
 
 final class EditorTests: XCTestCase {
+    func testComponentEditsSynchronizeAndUndoIncludingInvalidDrafts() throws {
+        _ = NSApplication.shared
+        let editor = AppDelegate()
+        editor.history.groupsByEvent = false
+        func edit(_ action: () -> Void) {
+            editor.history.beginUndoGrouping()
+            action()
+            editor.history.endUndoGrouping()
+        }
+        edit {
+            editor.left.string = "https://old.example:443/path?keep=%2f#frag"
+            editor.textDidChange(Notification(name: NSText.didChangeNotification, object: editor.left))
+        }
+        let originalJSON = editor.right.string
+        XCTAssertEqual(editor.hostField.stringValue, "old.example")
+        edit {
+            editor.hostField.stringValue = "new.example"
+            editor.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: editor.hostField))
+        }
+        XCTAssertEqual(editor.left.string, "https://new.example:443/path?keep=%2f#frag")
+        XCTAssertEqual(editor.right.string, originalJSON)
+        editor.undoEdit()
+        XCTAssertEqual(editor.hostField.stringValue, "old.example")
+        XCTAssertTrue(editor.left.string.contains("old.example"))
+        editor.redoEdit()
+        XCTAssertEqual(editor.hostField.stringValue, "new.example")
+        let validURL = editor.left.string
+        edit {
+            editor.schemeField.stringValue = ""
+            editor.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: editor.schemeField))
+        }
+        XCTAssertEqual(editor.left.string, validURL)
+        XCTAssertTrue(editor.status.stringValue.hasPrefix("未同步"))
+        editor.undoEdit()
+        XCTAssertEqual(editor.schemeField.stringValue, "https")
+        editor.redoEdit()
+        XCTAssertEqual(editor.schemeField.stringValue, "")
+        XCTAssertEqual(editor.left.string, validURL)
+        XCTAssertTrue(editor.status.stringValue.hasPrefix("未同步"))
+        edit {
+            editor.schemeField.stringValue = "custom"
+            editor.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: editor.schemeField))
+        }
+        edit {
+            editor.pathField.stringValue = "/new path"
+            editor.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: editor.pathField))
+        }
+        XCTAssertEqual(editor.left.string, "custom://new.example:443/new%20path?keep=%2f#frag")
+        edit {
+            editor.right.string = "{\"keep\":\"changed\"}"
+            editor.textDidChange(Notification(name: NSText.didChangeNotification, object: editor.right))
+        }
+        XCTAssertEqual(editor.left.string, "custom://new.example:443/new%20path?keep=changed#frag")
+        XCTAssertEqual(editor.pathField.stringValue, "/new%20path")
+    }
+
     func testSplitDefaultsAndRestoresRatio() {
         let name = "URLParserTests.\(UUID().uuidString)"
         let preferences = UserDefaults(suiteName: name)!

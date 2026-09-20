@@ -44,9 +44,67 @@ public struct URLDocument {
         return String(decoding: data, as: UTF8.self)
     }
 
-    public var summary: String {
-        let c = URLComponents(string: original)
-        return "协议: \(c?.scheme ?? "")    Host: \(c?.host ?? "")\n路径: \(c?.percentEncodedPath ?? "")    参数: \(items.count)"
+    public enum Component { case scheme, host, path }
+
+    // Work on the original prefix so editing one component never normalizes
+    // credentials, port, query encoding, or fragment elsewhere in the URL.
+    private var componentRanges: (scheme: Range<String.Index>, host: Range<String.Index>?, path: Range<String.Index>) {
+        let colon = prefix.firstIndex(of: ":")!
+        let afterScheme = prefix.index(after: colon)
+        guard prefix[afterScheme...].hasPrefix("//") else {
+            return (prefix.startIndex..<colon, nil, afterScheme..<prefix.endIndex)
+        }
+        let authorityStart = prefix.index(afterScheme, offsetBy: 2)
+        let authorityEnd = prefix[authorityStart...].firstIndex(of: "/") ?? prefix.endIndex
+        let authority = authorityStart..<authorityEnd
+        let hostStart = prefix[authority].lastIndex(of: "@").map { prefix.index(after: $0) } ?? authorityStart
+        let hostEnd: String.Index
+        if prefix[hostStart..<authorityEnd].hasPrefix("["), let bracket = prefix[hostStart..<authorityEnd].firstIndex(of: "]") {
+            hostEnd = prefix.index(after: bracket)
+        } else {
+            hostEnd = prefix[hostStart..<authorityEnd].firstIndex(of: ":") ?? authorityEnd
+        }
+        return (prefix.startIndex..<colon, hostStart..<hostEnd, authorityEnd..<prefix.endIndex)
+    }
+
+    public var scheme: String { String(prefix[componentRanges.scheme]) }
+    public var host: String { componentRanges.host.map { String(prefix[$0]) } ?? "" }
+    public var path: String { String(prefix[componentRanges.path]) }
+
+    public func applying(component: Component, value: String) throws -> String {
+        let ranges = componentRanges
+        let range: Range<String.Index>
+        let replacement: String
+        switch component {
+        case .scheme:
+            guard value.range(of: "^[A-Za-z][A-Za-z0-9+.-]*$", options: .regularExpression) != nil else {
+                throw Failure("协议须以字母开头，只能包含字母、数字、+、-、.，不含 ://")
+            }
+            range = ranges.scheme; replacement = value
+        case .host:
+            guard let hostRange = ranges.host else { throw Failure("此 URL 没有 // Host 部分，请在左侧修改 URL 结构") }
+            guard let c = URLComponents(string: "x://" + value), c.host != nil,
+                  c.user == nil, c.password == nil, c.port == nil,
+                  c.path.isEmpty, c.query == nil, c.fragment == nil,
+                  !value.contains(":") || (value.hasPrefix("[") && value.hasSuffix("]")),
+                  !value.contains("\\"), value.removingPercentEncoding != nil else {
+                throw Failure("Host 仅填写主机名或方括号内的 IPv6 地址，不含协议、端口或路径")
+            }
+            range = hostRange; replacement = value
+        case .path:
+            guard value.removingPercentEncoding != nil else { throw Failure("路径包含无效的百分号编码") }
+            var allowed = CharacterSet.urlPathAllowed
+            allowed.insert(charactersIn: "%")
+            allowed.remove(charactersIn: "?#")
+            var encoded = value.addingPercentEncoding(withAllowedCharacters: allowed)!
+            if ranges.host != nil, !encoded.isEmpty, !encoded.hasPrefix("/") { encoded = "/" + encoded }
+            range = ranges.path; replacement = encoded
+        }
+        var changedPrefix = prefix
+        changedPrefix.replaceSubrange(range, with: replacement)
+        let result = changedPrefix + original.dropFirst(prefix.count)
+        _ = try URLDocument(result)
+        return result
     }
 
     public func applying(json: String) throws -> String {

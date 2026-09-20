@@ -1,7 +1,7 @@
 import AppKit
 import URLCore
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextViewDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextViewDelegate, NSTextFieldDelegate {
     var window: NSWindow!
     let left = AppDelegate.makeEditor()
     let right = JSONTextView()
@@ -13,12 +13,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         layout.addTextContainer(container)
         return NSTextView(frame: .zero, textContainer: container)
     }
-    let info = NSTextField(wrappingLabelWithString: "")
+    let schemeField = NSTextField(string: "")
+    let hostField = NSTextField(string: "")
+    let pathField = NSTextField(string: "")
+    var componentFields: [NSTextField] { [schemeField, hostField, pathField] }
     let status = NSTextField(wrappingLabelWithString: "输入 URL 后自动解析；右侧修改有效 JSON 后立即同步。")
     let history = UndoManager()
     var document: URLDocument?
     var changing = false
-    struct State { let url: String; let json: String }
+    struct State { let url: String; let json: String; var components: [String] = ["", "", ""] }
     var state = State(url: "", json: "{}")
     var qrWindow: NSWindow?
 
@@ -41,11 +44,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         split.addArrangedSubview(pane("URL", left))
         split.addArrangedSubview(pane("解码后的 Query JSON（可编辑）", right))
         root.addArrangedSubview(split)
-        root.addArrangedSubview(info); root.addArrangedSubview(status)
-        info.font = .systemFont(ofSize: 12); info.textColor = .secondaryLabelColor
+        let fields = NSStackView()
+        fields.spacing = 8
+        for (title, field) in zip(["协议", "Host", "路径"], componentFields) {
+            field.delegate = self
+            field.placeholderString = title
+            field.setAccessibilityLabel(title)
+            field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            field.isEnabled = false
+            fields.addArrangedSubview(NSTextField(labelWithString: title))
+            fields.addArrangedSubview(field)
+        }
+        schemeField.widthAnchor.constraint(equalToConstant: 90).isActive = true
+        hostField.widthAnchor.constraint(equalTo: pathField.widthAnchor, multiplier: 0.7).isActive = true
+        root.addArrangedSubview(fields); root.addArrangedSubview(status)
         status.font = .systemFont(ofSize: 12)
         window.contentView = root
-        for v in [bar, split, info, status] { v.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true }
+        for v in [bar, split, fields, status] { v.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true }
         split.heightAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
         right.string = "{}"
         right.refreshSyntax()
@@ -111,26 +126,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let previous = state
         synchronize(fromLeft: (notification.object as? NSTextView) === left)
         right.refreshSyntax()
-        state = State(url: left.string, json: right.string)
+        recordEdit(previous: previous)
+    }
+    func recordEdit(previous: State) {
+        state = State(url: left.string, json: right.string, components: componentFields.map(\.stringValue))
+        let componentPatches = zip(previous.components, state.components).map { TextPatch(from: $0.0, to: $0.1) }
         let urlPatch = TextPatch(from: previous.url, to: state.url)
         let jsonPatch = TextPatch(from: previous.json, to: state.json)
-        history.registerUndo(withTarget: self) { $0.restore(urlPatch: urlPatch, jsonPatch: jsonPatch, reversed: true) }
+        history.registerUndo(withTarget: self) { $0.restore(urlPatch: urlPatch, jsonPatch: jsonPatch, componentPatches: componentPatches, reversed: true) }
         history.setActionName("编辑")
     }
-    func restore(urlPatch: TextPatch, jsonPatch: TextPatch, reversed: Bool) {
-        history.registerUndo(withTarget: self) { $0.restore(urlPatch: urlPatch, jsonPatch: jsonPatch, reversed: !reversed) }
-        let restored = State(url: urlPatch.apply(to: state.url, reversed: reversed), json: jsonPatch.apply(to: state.json, reversed: reversed))
+    func restore(urlPatch: TextPatch, jsonPatch: TextPatch, componentPatches: [TextPatch], reversed: Bool) {
+        history.registerUndo(withTarget: self) { $0.restore(urlPatch: urlPatch, jsonPatch: jsonPatch, componentPatches: componentPatches, reversed: !reversed) }
+        let restored = State(url: urlPatch.apply(to: state.url, reversed: reversed), json: jsonPatch.apply(to: state.json, reversed: reversed), components: zip(componentPatches, state.components).map { $0.0.apply(to: $0.1, reversed: reversed) })
         changing = true; left.string = restored.url; right.string = restored.json; changing = false
         state = restored; document = try? URLDocument(restored.url)
         right.refreshSyntax()
+        for (field, value) in zip(componentFields, restored.components) { field.stringValue = value }
         updateStatus(validate: true)
+        validateComponentDrafts()
+    }
+    func refreshComponents() {
+        let values = document.map { [$0.scheme, $0.host, $0.path] } ?? ["", "", ""]
+        for (field, value) in zip(componentFields, values) { field.stringValue = value; field.isEnabled = document != nil }
+    }
+    func controlTextDidBeginEditing(_ notification: Notification) {
+        ((notification.object as? NSTextField)?.currentEditor() as? NSTextView)?.allowsUndo = false
+    }
+    func controlTextDidChange(_ notification: Notification) {
+        guard !changing, let field = notification.object as? NSTextField,
+              let index = componentFields.firstIndex(where: { $0 === field }), let document else { return }
+        let previous = state
+        do {
+            let component: URLDocument.Component = [.scheme, .host, .path][index]
+            let url = try document.applying(component: component, value: field.stringValue)
+            self.document = try URLDocument(url)
+            changing = true; left.string = url; changing = false
+            updateStatus(validate: true)
+            validateComponentDrafts()
+        } catch {
+            status.textColor = .systemRed; status.stringValue = "未同步：" + error.localizedDescription
+        }
+        recordEdit(previous: previous)
+    }
+    func validateComponentDrafts() {
+        guard let document else { return }
+        do {
+            for (component, field) in zip([URLDocument.Component.scheme, .host, .path], componentFields) {
+                // Host is absent in opaque URLs such as mailto:; leave it alone.
+                if component == .host && field.stringValue == document.host { continue }
+                _ = try document.applying(component: component, value: field.stringValue)
+            }
+        } catch {
+            status.textColor = .systemRed; status.stringValue = "未同步：" + error.localizedDescription
+        }
     }
     func synchronize(fromLeft: Bool) {
-        changing = true; defer { changing = false }
+        changing = true; defer { refreshComponents(); changing = false }
         do {
             if fromLeft {
                 if left.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    document = nil; right.string = "{}"; info.stringValue = ""; status.stringValue = "请输入 URL"; return
+                    document = nil; right.string = "{}"; status.stringValue = "请输入 URL"; return
                 }
                 let parsed = try URLDocument(left.string)
                 document = parsed; right.string = parsed.json
@@ -141,12 +197,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             }
             updateStatus()
         } catch {
-            if fromLeft { document = nil; info.stringValue = "" }
+            if fromLeft { document = nil }
             status.textColor = .systemRed; status.stringValue = "未同步：" + error.localizedDescription
         }
     }
     func updateStatus(validate: Bool = false) {
-        info.stringValue = document?.summary ?? ""
+        componentFields.forEach { $0.isEnabled = document != nil }
         status.textColor = .secondaryLabelColor
         status.stringValue = "已同步 · 重复参数用数组；null 表示无等号参数；+ 按字面保留；百分号解码一层。"
         if let document {

@@ -38,6 +38,37 @@ final class URLDocumentTests: XCTestCase {
         let d = try URLDocument("https://host/path#frag")
         XCTAssertEqual(try d.applying(json: "{\"x\":\"y\"}"), "https://host/path?x=y#frag")
     }
+    func testComponentEditingPreservesUntouchedURLBytes() throws {
+        let original = "custom://user:p%40ss@old.example:8443/a%2fb?x=%2f&x=two+words&flag#raw%2f"
+        let d = try URLDocument(original)
+        XCTAssertEqual(d.scheme, "custom")
+        XCTAssertEqual(d.host, "old.example")
+        XCTAssertEqual(d.path, "/a%2fb")
+        XCTAssertEqual(try d.applying(component: .scheme, value: "https"), original.replacingOccurrences(of: "custom:", with: "https:"))
+        XCTAssertEqual(try d.applying(component: .host, value: "new.example"), original.replacingOccurrences(of: "old.example", with: "new.example"))
+        XCTAssertEqual(try d.applying(component: .path, value: "/new%2fpath"), original.replacingOccurrences(of: "/a%2fb", with: "/new%2fpath"))
+        let changed = try URLDocument(d.applying(component: .host, value: "[2001:db8::1]"))
+        XCTAssertEqual(changed.host, "[2001:db8::1]")
+        XCTAssertTrue(try changed.applying(component: .host, value: "next.example").contains("@next.example:8443/"))
+        XCTAssertEqual(try d.applying(component: .path, value: ""), original.replacingOccurrences(of: "/a%2fb", with: ""))
+    }
+    func testComponentEncodingAndValidation() throws {
+        let d = try URLDocument("https://host/path?x=%252F#frag")
+        XCTAssertEqual(try d.applying(component: .path, value: "中文 a?#"), "https://host/%E4%B8%AD%E6%96%87%20a%3F%23?x=%252F#frag")
+        for scheme in ["", "1http", "https://", "a b", "a\n"] {
+            XCTAssertThrowsError(try d.applying(component: .scheme, value: scheme))
+        }
+        for host in ["bad host", "host:80", "user@host", "host/path", "host?x=1", "host#fragment", "[::1", "host%ZZ"] {
+            XCTAssertThrowsError(try d.applying(component: .host, value: host), host)
+        }
+        XCTAssertThrowsError(try d.applying(component: .path, value: "/bad%ZZ"))
+        let opaque = try URLDocument("custom:hello?x=1#f")
+        XCTAssertEqual(opaque.host, "")
+        XCTAssertEqual(try opaque.applying(component: .path, value: "world"), "custom:world?x=1#f")
+        XCTAssertThrowsError(try opaque.applying(component: .host, value: "host"))
+        let emptyQuery = try URLDocument("file:///tmp/a?#f")
+        XCTAssertEqual(try emptyQuery.applying(component: .path, value: "/tmp/b"), "file:///tmp/b?#f")
+    }
     func testLargeURLRoundTrip() throws {
         let url = "imeituan://host/mrn?" + (0..<1000).map { "key\($0)=value%20\($0)" }.joined(separator: "&")
         let d = try URLDocument(url)
