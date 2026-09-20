@@ -1,7 +1,7 @@
 import AppKit
 import URLCore
 
-final class JSONTextView: NSTextView, NSTextStorageDelegate {
+final class JSONTextView: EditorTextView, NSTextStorageDelegate {
     private var previousLength = 0
     private var needsFullHighlight = true
     private var editedStart: Int?
@@ -125,10 +125,15 @@ final class JSONTextView: NSTextView, NSTextStorageDelegate {
         setSelectedRange(JSONIndex.contentRange(key ? field.key : field.value, in: string))
         refreshSelectionHighlight()
         let menu = NSMenu()
+        menu.allowsContextMenuPlugIns = false
         let copy = menu.addItem(withTitle: key ? "复制 Key" : "复制 Value", action: #selector(copyToken), keyEquivalent: "")
         copy.target = self
         let delete = menu.addItem(withTitle: key ? "删除 Key（整个参数）" : "删除 Value（清空值）", action: #selector(deleteToken), keyEquivalent: "")
         delete.target = self
+        if !key {
+            let remove = menu.addItem(withTitle: "删除整个参数", action: #selector(deleteParameter), keyEquivalent: "")
+            remove.target = self
+        }
         return menu
     }
     @objc private func copyToken() {
@@ -136,10 +141,12 @@ final class JSONTextView: NSTextView, NSTextStorageDelegate {
         let value = JSONIndex.copiedText(target.key ? target.field.key : target.field.value, in: string)
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string)
     }
-    @objc private func deleteToken() {
+    @objc private func deleteParameter() { deleteSelection(entireParameter: true) }
+    @objc private func deleteToken() { deleteSelection(entireParameter: menuTarget?.key == true) }
+    private func deleteSelection(entireParameter: Bool) {
         guard let target = menuTarget else { return }
-        let range = target.key ? target.field.deletion : target.field.value
-        let replacement = target.key ? "" : "\"\""
+        let range = entireParameter ? target.field.deletion : target.field.value
+        let replacement = entireParameter ? "" : "\"\""
         guard shouldChangeText(in: range, replacementString: replacement) else { return }
         textStorage?.replaceCharacters(in: range, with: replacement)
         setSelectedRange(NSRange(location: min(range.location, (string as NSString).length), length: 0))

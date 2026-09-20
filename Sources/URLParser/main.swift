@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let container = NSTextContainer(size: NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude))
         storage.addLayoutManager(layout)
         layout.addTextContainer(container)
-        return NSTextView(frame: .zero, textContainer: container)
+        return EditorTextView(frame: .zero, textContainer: container)
     }
     let schemeField = NSTextField(string: "")
     let hostField = NSTextField(string: "")

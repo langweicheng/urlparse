@@ -185,7 +185,8 @@ final class EditorTests: XCTestCase {
         _ = NSApplication.shared
         for (character, expectedTitle, expectedText) in [
             (2, "删除 Key（整个参数）", "{\"other\":\"x\"}"),
-            (9, "删除 Value（清空值）", "{\"city\":\"\",\"other\":\"x\"}")
+            (9, "删除 Value（清空值）", "{\"city\":\"\",\"other\":\"x\"}"),
+            (9, "删除整个参数", "{\"other\":\"x\"}")
         ] {
             let view = JSONTextView()
             view.frame = NSRect(x: 0, y: 0, width: 500, height: 300)
@@ -203,6 +204,8 @@ final class EditorTests: XCTestCase {
             }
             let event = NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
             let menu = try XCTUnwrap(view.menu(for: event))
+            XCTAssertFalse(menu.allowsContextMenuPlugIns)
+            XCTAssertEqual(menu.items.count, character == 2 ? 2 : 3)
             let item = try XCTUnwrap(menu.items.first { $0.title == expectedTitle })
             _ = (item.target as? NSObject)?.perform(item.action)
             XCTAssertEqual(view.string, expectedText)
