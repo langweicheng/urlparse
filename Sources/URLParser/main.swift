@@ -29,19 +29,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func applicationDidFinishLaunching(_ notification: Notification) {
         history.levelsOfUndo = 100
         makeMenu()
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "URL Parser"
         window.titlebarSeparatorStyle = .none
         window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
         window.minSize = NSSize(width: 720, height: 440)
         window.delegate = self
         window.setFrameAutosaveName("MainWindow")
         let root = NSStackView()
-        root.orientation = .vertical; root.spacing = 12
-        root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        root.orientation = .vertical; root.spacing = 0
+        root.edgeInsets = NSEdgeInsetsZero
+        let body = NSStackView()
+        body.orientation = .vertical; body.spacing = 12
+        body.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 12, right: 12)
         let bar = NSStackView(views: [button("粘贴 URL", #selector(pasteURL)), button("复制 URL", #selector(copyURL)), button("复制 JSON", #selector(copyJSON)), button("清空", #selector(clear)), button("撤销", #selector(undoEdit)), button("重做", #selector(redoEdit)), button("生成二维码", #selector(showQR))])
         bar.spacing = 8
+        // Full-width toolbar: padding belongs inside it, including the space
+        // reserved for the native window controls on the left.
+        bar.edgeInsets = NSEdgeInsets(top: 4, left: 80, bottom: 4, right: 8)
         root.addArrangedSubview(bar)
+        root.addArrangedSubview(body)
         let split = PersistentSplitView(frame: .zero)
         split.isVertical = true; split.dividerStyle = .thin
         split.addArrangedSubview(pane("URL", left))
@@ -60,12 +69,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         }
         schemeField.widthAnchor.constraint(equalToConstant: 90).isActive = true
         hostField.widthAnchor.constraint(equalTo: pathField.widthAnchor, multiplier: 0.7).isActive = true
-        root.addArrangedSubview(fields)
-        root.addArrangedSubview(split)
-        root.addArrangedSubview(status)
+        body.addArrangedSubview(fields)
+        body.addArrangedSubview(split)
+        body.addArrangedSubview(status)
         status.font = .systemFont(ofSize: 12)
         window.contentView = root
-        for v in [bar, split, fields, status] { v.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true }
+        for v in [bar, body] { v.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true }
+        for v in [split, fields, status] { v.widthAnchor.constraint(equalTo: body.widthAnchor, constant: -24).isActive = true }
+        bar.heightAnchor.constraint(equalToConstant: 36).isActive = true
+        window.minSize.width = max(720, bar.fittingSize.width)
         split.heightAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
         right.string = "{}"
         right.refreshSyntax()
