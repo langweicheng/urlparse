@@ -59,6 +59,48 @@ final class EditorTests: XCTestCase {
         XCTAssertEqual(editor.pathField.stringValue, "/new%20path")
     }
 
+    func testCreateURLFromEmptyFieldsInAnyOrder() throws {
+        _ = NSApplication.shared
+        for order in [[0, 1, 2], [1, 2, 0], [2, 0, 1]] {
+            let editor = AppDelegate()
+            editor.history.groupsByEvent = false
+            let values = ["https", "example.com", "/中文 path"]
+            for index in order {
+                XCTAssertTrue(editor.componentFields[index].isEnabled)
+                editor.history.beginUndoGrouping()
+                editor.componentFields[index].stringValue = values[index]
+                editor.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: editor.componentFields[index]))
+                editor.history.endUndoGrouping()
+            }
+            XCTAssertEqual(editor.left.string, "https://example.com/%E4%B8%AD%E6%96%87%20path")
+            XCTAssertNotNil(editor.document)
+            editor.undoEdit()
+            editor.redoEdit()
+            XCTAssertEqual(editor.left.string, "https://example.com/%E4%B8%AD%E6%96%87%20path")
+            XCTAssertEqual(editor.componentFields.map(\.stringValue), values)
+            for _ in 0..<3 { editor.undoEdit() }
+            XCTAssertEqual(editor.left.string, "")
+            XCTAssertEqual(editor.componentFields.map(\.stringValue), ["", "", ""])
+            XCTAssertTrue(editor.componentFields.allSatisfy(\.isEnabled))
+        }
+    }
+
+    func testDraftSurvivesJSONEditingBeforeSchemeAndClear() {
+        _ = NSApplication.shared
+        let editor = AppDelegate()
+        editor.hostField.stringValue = "example.com"
+        editor.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: editor.hostField))
+        editor.right.string = "{\"a\":\"1\"}"
+        editor.textDidChange(Notification(name: NSText.didChangeNotification, object: editor.right))
+        XCTAssertEqual(editor.hostField.stringValue, "example.com")
+        editor.schemeField.stringValue = "https"
+        editor.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: editor.schemeField))
+        XCTAssertEqual(editor.left.string, "https://example.com?a=1")
+        editor.clear()
+        XCTAssertEqual(editor.componentFields.map(\.stringValue), ["", "", ""])
+        XCTAssertTrue(editor.componentFields.allSatisfy(\.isEnabled))
+    }
+
     func testSplitDefaultsAndRestoresRatio() {
         let name = "URLParserTests.\(UUID().uuidString)"
         let preferences = UserDefaults(suiteName: name)!

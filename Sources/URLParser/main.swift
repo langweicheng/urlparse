@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     let hostField = NSTextField(string: "")
     let pathField = NSTextField(string: "")
     var componentFields: [NSTextField] { [schemeField, hostField, pathField] }
-    let status = NSTextField(wrappingLabelWithString: "输入 URL 后自动解析；右侧修改有效 JSON 后立即同步。")
+    let status = NSTextField(wrappingLabelWithString: "粘贴 URL，或填写协议、Host 和路径创建 URL。")
     let history = UndoManager()
     var document: URLDocument?
     var changing = false
@@ -51,7 +51,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             field.placeholderString = title
             field.setAccessibilityLabel(title)
             field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            field.isEnabled = false
             fields.addArrangedSubview(NSTextField(labelWithString: title))
             fields.addArrangedSubview(field)
         }
@@ -148,18 +147,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
     func refreshComponents() {
         let values = document.map { [$0.scheme, $0.host, $0.path] } ?? ["", "", ""]
-        for (field, value) in zip(componentFields, values) { field.stringValue = value; field.isEnabled = document != nil }
+        for (field, value) in zip(componentFields, values) { field.stringValue = value }
     }
     func controlTextDidBeginEditing(_ notification: Notification) {
         ((notification.object as? NSTextField)?.currentEditor() as? NSTextView)?.allowsUndo = false
     }
     func controlTextDidChange(_ notification: Notification) {
         guard !changing, let field = notification.object as? NSTextField,
-              let index = componentFields.firstIndex(where: { $0 === field }), let document else { return }
+              let index = componentFields.firstIndex(where: { $0 === field }) else { return }
         let previous = state
         do {
             let component: URLDocument.Component = [.scheme, .host, .path][index]
-            let url = try document.applying(component: component, value: field.stringValue)
+            let url: String
+            if let document {
+                url = try document.applying(component: component, value: field.stringValue)
+            } else {
+                var draft = try URLDocument("https://")
+                for (part, input) in zip([URLDocument.Component.scheme, .host, .path], componentFields) {
+                    draft = try URLDocument(draft.applying(component: part, value: input.stringValue))
+                }
+                // Keep unfinished JSON visible while creating a URL from the fields.
+                url = (try? draft.applying(json: right.string)) ?? draft.original
+            }
             self.document = try URLDocument(url)
             changing = true; left.string = url; changing = false
             updateStatus(validate: true)
@@ -170,7 +179,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         recordEdit(previous: previous)
     }
     func validateComponentDrafts() {
-        guard let document else { return }
+        guard let document else {
+            if componentFields.contains(where: { !$0.stringValue.isEmpty }) {
+                status.textColor = .systemRed
+                status.stringValue = "未同步：请填写有效协议，例如 https；Host 和路径可先填写。"
+            }
+            return
+        }
         do {
             for (component, field) in zip([URLDocument.Component.scheme, .host, .path], componentFields) {
                 // Host is absent in opaque URLs such as mailto:; leave it alone.
@@ -182,7 +197,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         }
     }
     func synchronize(fromLeft: Bool) {
-        changing = true; defer { refreshComponents(); changing = false }
+        changing = true
+        var shouldRefreshComponents = fromLeft
+        defer { if shouldRefreshComponents { refreshComponents() }; changing = false }
         do {
             if fromLeft {
                 if left.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -194,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
                 guard let document else { throw Failure("请先在左侧输入有效 URL") }
                 let url = try document.applying(json: right.string)
                 left.string = url; self.document = try URLDocument(url)
+                shouldRefreshComponents = true
             }
             updateStatus()
         } catch {
@@ -202,7 +220,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         }
     }
     func updateStatus(validate: Bool = false) {
-        componentFields.forEach { $0.isEnabled = document != nil }
         status.textColor = .secondaryLabelColor
         status.stringValue = "已同步 · 重复参数用数组；null 表示无等号参数；+ 按字面保留；百分号解码一层。"
         if let document {
