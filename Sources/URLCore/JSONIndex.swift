@@ -74,6 +74,79 @@ public struct JSONIndex {
     }
 
     public func field(at index: Int) -> Field? { fields.first { NSLocationInRange(index, $0.range) } }
+
+    /// The text must be the same snapshot used to create this index.
+    public func selection(at offset: Int, in text: String) -> URLSelection? {
+        guard let field = field(at: offset) else { return nil }
+        let name = Self.copiedText(field.key, in: text)
+        guard uniqueField(named: name, in: text) != nil else { return nil }
+        if NSLocationInRange(offset, field.key) { return .queryKey(name) }
+        guard NSLocationInRange(offset, field.value) else { return nil }
+        if let elements = arrayElements(in: field.value, text: text) {
+            let occurrence = elements.firstIndex { NSLocationInRange(offset, $0) }
+            return .queryValue(name, occurrence: occurrence)
+        }
+        return .queryValue(name, occurrence: 0)
+    }
+
+    /// Keys and scalar values include their JSON quotes. Array selections can
+    /// refer to an individual occurrence or the complete array value.
+    public func range(for selection: URLSelection, in text: String) -> NSRange? {
+        let name: String
+        switch selection {
+        case .component: return nil
+        case .queryKey(let key), .queryValue(let key, _): name = key
+        }
+        guard let field = uniqueField(named: name, in: text) else { return nil }
+        switch selection {
+        case .queryKey: return field.key
+        case .queryValue(_, let occurrence):
+            guard let occurrence else { return field.value }
+            guard occurrence >= 0 else { return nil }
+            guard let elements = arrayElements(in: field.value, text: text) else {
+                return occurrence == 0 ? field.value : nil
+            }
+            return occurrence < elements.count ? elements[occurrence] : nil
+        case .component: return nil
+        }
+    }
+
+    // Duplicate JSON field names have no unambiguous source occurrence. Leave
+    // their editing behavior intact, but do not link either field to the URL.
+    private func uniqueField(named name: String, in text: String) -> Field? {
+        var match: Field?
+        for field in fields where Self.copiedText(field.key, in: text) == name {
+            guard match == nil else { return nil }
+            match = field
+        }
+        return match
+    }
+
+    private func arrayElements(in range: NSRange, text: String) -> [NSRange]? {
+        let source = text as NSString
+        guard source.character(at: range.location) == 91 else { return nil }
+        var result: [NSRange] = []
+        var start: Int?
+        var end = range.location
+        var depth = 0
+        for token in tokens where token.range.location > range.location && token.range.location < NSMaxRange(range) {
+            let c = source.character(at: token.range.location)
+            if token.kind == .punctuation, depth == 0, c == 44 || c == 93 {
+                if let start { result.append(NSRange(location: start, length: end - start)) }
+                start = nil
+                if c == 93 { break }
+                continue
+            }
+            if start == nil { start = token.range.location }
+            if token.kind == .punctuation {
+                if c == 91 || c == 123 { depth += 1 }
+                if c == 93 || c == 125 { depth -= 1 }
+            }
+            end = NSMaxRange(token.range)
+        }
+        return result
+    }
+
     public static func contentRange(_ range: NSRange, in text: String) -> NSRange {
         let source = text as NSString
         if range.length >= 2, source.character(at: range.location) == 34, source.character(at: NSMaxRange(range) - 1) == 34 {

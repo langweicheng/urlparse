@@ -44,11 +44,11 @@ public struct URLDocument {
         return String(decoding: data, as: UTF8.self)
     }
 
-    public enum Component { case scheme, host, path }
+    public enum Component: Equatable { case scheme, host, path, hash }
 
     // Work on the original prefix so editing one component never normalizes
     // credentials, port, query encoding, or fragment elsewhere in the URL.
-    private var componentRanges: (scheme: Range<String.Index>, host: Range<String.Index>?, path: Range<String.Index>) {
+    var componentRanges: (scheme: Range<String.Index>, host: Range<String.Index>?, path: Range<String.Index>) {
         let colon = prefix.firstIndex(of: ":")!
         let afterScheme = prefix.index(after: colon)
         guard prefix[afterScheme...].hasPrefix("//") else {
@@ -70,6 +70,7 @@ public struct URLDocument {
     public var scheme: String { String(prefix[componentRanges.scheme]) }
     public var host: String { componentRanges.host.map { String(prefix[$0]) } ?? "" }
     public var path: String { String(prefix[componentRanges.path]) }
+    public var hash: String { fragment }
 
     public func applying(component: Component, value: String) throws -> String {
         let ranges = componentRanges
@@ -99,6 +100,15 @@ public struct URLDocument {
             var encoded = value.addingPercentEncoding(withAllowedCharacters: allowed)!
             if ranges.host != nil, !encoded.isEmpty, !encoded.hasPrefix("/") { encoded = "/" + encoded }
             range = ranges.path; replacement = encoded
+        case .hash:
+            let content = value.hasPrefix("#") ? String(value.dropFirst()) : value
+            guard content.removingPercentEncoding != nil else { throw Failure("Hash 包含无效的百分号编码") }
+            var allowed = CharacterSet.urlFragmentAllowed
+            allowed.insert(charactersIn: "%#")
+            let encoded = content.addingPercentEncoding(withAllowedCharacters: allowed)!
+            let result = String(original.dropLast(fragment.count)) + (value.isEmpty ? "" : "#" + encoded)
+            _ = try URLDocument(result)
+            return result
         }
         var changedPrefix = prefix
         changedPrefix.replaceSubrange(range, with: replacement)

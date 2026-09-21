@@ -77,10 +77,10 @@ final class EditorTests: XCTestCase {
             editor.undoEdit()
             editor.redoEdit()
             XCTAssertEqual(editor.left.string, "https://example.com/%E4%B8%AD%E6%96%87%20path")
-            XCTAssertEqual(editor.componentFields.map(\.stringValue), values)
+            XCTAssertEqual(editor.componentFields.map(\.stringValue), values + [""])
             for _ in 0..<3 { editor.undoEdit() }
             XCTAssertEqual(editor.left.string, "")
-            XCTAssertEqual(editor.componentFields.map(\.stringValue), ["", "", ""])
+            XCTAssertEqual(editor.componentFields.map(\.stringValue), ["", "", "", ""])
             XCTAssertTrue(editor.componentFields.allSatisfy(\.isEnabled))
         }
     }
@@ -97,7 +97,7 @@ final class EditorTests: XCTestCase {
         editor.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: editor.schemeField))
         XCTAssertEqual(editor.left.string, "https://example.com?a=1")
         editor.clear()
-        XCTAssertEqual(editor.componentFields.map(\.stringValue), ["", "", ""])
+        XCTAssertEqual(editor.componentFields.map(\.stringValue), ["", "", "", ""])
         XCTAssertTrue(editor.componentFields.allSatisfy(\.isEnabled))
     }
 

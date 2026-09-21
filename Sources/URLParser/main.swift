@@ -5,7 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     var window: NSWindow!
     let left = AppDelegate.makeEditor()
     let right = JSONTextView()
-    static func makeEditor() -> NSTextView {
+    static func makeEditor() -> EditorTextView {
         let storage = NSTextStorage()
         let layout = NSLayoutManager()
         layout.allowsNonContiguousLayout = true
@@ -14,17 +14,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         layout.addTextContainer(container)
         return EditorTextView(frame: .zero, textContainer: container)
     }
-    let schemeField = NSTextField(string: "")
-    let hostField = NSTextField(string: "")
-    let pathField = NSTextField(string: "")
-    var componentFields: [NSTextField] { [schemeField, hostField, pathField] }
-    let status = NSTextField(wrappingLabelWithString: "粘贴 URL，或填写协议、Host 和路径创建 URL。")
+    let schemeField = ComponentTextField(string: "")
+    let hostField = ComponentTextField(string: "")
+    let pathField = ComponentTextField(string: "")
+    let hashField = ComponentTextField(string: "")
+    static let components: [URLDocument.Component] = [.scheme, .host, .path, .hash]
+    var componentFields: [ComponentTextField] { [schemeField, hostField, pathField, hashField] }
+    let status = NSTextField(wrappingLabelWithString: "粘贴 URL，或填写协议、Host、路径和 Hash 创建 URL。")
     let history = UndoManager()
     var document: URLDocument?
     var changing = false
-    struct State { let url: String; let json: String; var components: [String] = ["", "", ""] }
+    struct State { let url: String; let json: String; var components: [String] = ["", "", "", ""] }
     var state = State(url: "", json: "{}")
     var qrWindow: NSWindow?
+    enum SelectionSource { case url, json, component(Int) }
+    var selectionSource: SelectionSource = .url
+    var sourceIndex: URLSourceIndex?
+    var sourceOffset = 0
+    var indexedURL = ""
+    var indexedJSON = ""
+    var canLinkQuery = false
+
+    override init() {
+        super.init()
+        left.onInteraction = { [weak self] in self?.updateLinkedSelection(from: .url) }
+        right.onInteraction = { [weak self] in self?.updateLinkedSelection(from: .json) }
+        for (index, field) in componentFields.enumerated() {
+            field.onInteraction = { [weak self] in self?.updateLinkedSelection(from: .component(index)) }
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         history.levelsOfUndo = 100
@@ -57,25 +75,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         split.addArrangedSubview(pane("Query JSON · 可编辑", right))
         let fields = NSStackView()
         fields.spacing = 8
-        for (title, field) in zip(["协议", "Host", "路径"], componentFields) {
+        let hashRow = NSStackView()
+        hashRow.spacing = 8
+        for (title, field) in zip(["协议", "Host", "路径", "Hash"], componentFields) {
             field.delegate = self
             field.placeholderString = title
             field.setAccessibilityLabel(title)
             field.bezelStyle = .squareBezel
             field.focusRingType = .none
             field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            fields.addArrangedSubview(NSTextField(labelWithString: title))
-            fields.addArrangedSubview(field)
+            let row = field === hashField ? hashRow : fields
+            row.addArrangedSubview(NSTextField(labelWithString: title))
+            row.addArrangedSubview(field)
         }
+        hashField.placeholderString = "#/route?tab=info（可选）"
+        hashField.toolTip = "显示 # 开始的完整 Hash，保留原始编码。输入时可省略开头的 #；清空移除 Hash，单独输入 # 保留空 Hash。"
+        hashField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         schemeField.widthAnchor.constraint(equalToConstant: 90).isActive = true
         hostField.widthAnchor.constraint(equalTo: pathField.widthAnchor, multiplier: 0.7).isActive = true
         body.addArrangedSubview(fields)
+        body.addArrangedSubview(hashRow)
         body.addArrangedSubview(split)
         body.addArrangedSubview(status)
         status.font = .systemFont(ofSize: 12)
         window.contentView = root
         for v in [bar, body] { v.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true }
-        for v in [split, fields, status] { v.widthAnchor.constraint(equalTo: body.widthAnchor, constant: -24).isActive = true }
+        for v in [split, fields, hashRow, status] { v.widthAnchor.constraint(equalTo: body.widthAnchor, constant: -24).isActive = true }
         bar.heightAnchor.constraint(equalToConstant: 36).isActive = true
         window.minSize.width = max(720, bar.fittingSize.width)
         split.heightAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
@@ -150,15 +175,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
-        guard !changing, (notification.object as? NSTextView) === right else { return }
-        right.refreshSelectionHighlight()
+        guard !changing, let editor = notification.object as? NSTextView else { return }
+        if editor === left { updateLinkedSelection(from: .url) }
+        else if editor === right { updateLinkedSelection(from: .json) }
     }
     func textDidChange(_ notification: Notification) {
         guard !changing else { return }
         let previous = state
-        synchronize(fromLeft: (notification.object as? NSTextView) === left)
+        let fromLeft = (notification.object as? NSTextView) === left
+        clearLinkedHighlights()
+        synchronize(fromLeft: fromLeft)
         right.refreshSyntax()
         recordEdit(previous: previous)
+        rebuildSourceIndex()
+        updateLinkedSelection(from: fromLeft ? .url : .json, scroll: false)
     }
     func recordEdit(previous: State) {
         state = State(url: left.string, json: right.string, components: componentFields.map(\.stringValue))
@@ -171,32 +201,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func restore(urlPatch: TextPatch, jsonPatch: TextPatch, componentPatches: [TextPatch], reversed: Bool) {
         history.registerUndo(withTarget: self) { $0.restore(urlPatch: urlPatch, jsonPatch: jsonPatch, componentPatches: componentPatches, reversed: !reversed) }
         let restored = State(url: urlPatch.apply(to: state.url, reversed: reversed), json: jsonPatch.apply(to: state.json, reversed: reversed), components: zip(componentPatches, state.components).map { $0.0.apply(to: $0.1, reversed: reversed) })
+        clearLinkedHighlights()
         changing = true; left.replaceContent(with: restored.url); right.replaceContent(with: restored.json); changing = false
         state = restored; document = try? URLDocument(restored.url)
         right.refreshSyntax()
         for (field, value) in zip(componentFields, restored.components) { field.stringValue = value }
         updateStatus(validate: true)
         validateComponentDrafts()
+        rebuildSourceIndex()
+        updateLinkedSelection(from: selectionSource, scroll: false)
     }
     func refreshComponents() {
-        let values = document.map { [$0.scheme, $0.host, $0.path] } ?? ["", "", ""]
+        let values = document.map { [$0.scheme, $0.host, $0.path, $0.hash] } ?? ["", "", "", ""]
         for (field, value) in zip(componentFields, values) { field.stringValue = value }
     }
     func controlTextDidBeginEditing(_ notification: Notification) {
         ((notification.object as? NSTextField)?.currentEditor() as? NSTextView)?.allowsUndo = false
+        if let field = notification.object as? NSTextField,
+           let index = componentFields.firstIndex(where: { $0 === field }) {
+            updateLinkedSelection(from: .component(index))
+        }
     }
     func controlTextDidChange(_ notification: Notification) {
         guard !changing, let field = notification.object as? NSTextField,
               let index = componentFields.firstIndex(where: { $0 === field }) else { return }
         let previous = state
+        clearLinkedHighlights()
         do {
-            let component: URLDocument.Component = [.scheme, .host, .path][index]
+            let component = Self.components[index]
             let url: String
             if let document {
                 url = try document.applying(component: component, value: field.stringValue)
             } else {
                 var draft = try URLDocument("https://")
-                for (part, input) in zip([URLDocument.Component.scheme, .host, .path], componentFields) {
+                for (part, input) in zip(Self.components, componentFields) {
                     draft = try URLDocument(draft.applying(component: part, value: input.stringValue))
                 }
                 // Keep unfinished JSON visible while creating a URL from the fields.
@@ -206,6 +244,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             changing = true; left.replaceContent(with: url); changing = false
             updateStatus(validate: true)
             validateComponentDrafts()
+            rebuildSourceIndex()
+            updateLinkedSelection(from: .component(index), scroll: false)
         } catch {
             status.textColor = .systemRed; status.stringValue = "未同步：" + error.localizedDescription
         }
@@ -215,12 +255,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         guard let document else {
             if componentFields.contains(where: { !$0.stringValue.isEmpty }) {
                 status.textColor = .systemRed
-                status.stringValue = "未同步：请填写有效协议，例如 https；Host 和路径可先填写。"
+                status.stringValue = "未同步：请填写有效协议，例如 https；Host、路径和 Hash 可先填写。"
             }
             return
         }
         do {
-            for (component, field) in zip([URLDocument.Component.scheme, .host, .path], componentFields) {
+            for (component, field) in zip(Self.components, componentFields) {
                 // Host is absent in opaque URLs such as mailto:; leave it alone.
                 if component == .host && field.stringValue == document.host { continue }
                 _ = try document.applying(component: component, value: field.stringValue)
@@ -231,6 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
     func synchronize(fromLeft: Bool) {
         changing = true
+        canLinkQuery = false
         var shouldRefreshComponents = fromLeft
         defer { if shouldRefreshComponents { refreshComponents() }; changing = false }
         do {
@@ -253,14 +294,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         }
     }
     func updateStatus(validate: Bool = false) {
+        canLinkQuery = false
         status.textColor = .secondaryLabelColor
         status.stringValue = "已同步"
         status.toolTip = "重复参数用数组；null 表示无等号参数；+ 按字面保留；百分号解码一层。"
         if let document {
             if validate {
-                do { _ = try document.applying(json: right.string) }
+                do { canLinkQuery = try document.applying(json: right.string) == document.original }
                 catch { status.textColor = .systemRed; status.stringValue = "未同步：" + error.localizedDescription }
-            }
+            } else { canLinkQuery = true }
         } else { status.stringValue = left.string.isEmpty ? "请输入 URL" : "URL 无效，未同步" }
     }
     @objc func undoEdit() { history.undo() }

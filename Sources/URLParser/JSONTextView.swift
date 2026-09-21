@@ -89,31 +89,49 @@ final class JSONTextView: EditorTextView, NSTextStorageDelegate {
     }
 
     func refreshSelectionHighlight() {
-        if let highlighted, NSMaxRange(highlighted) <= (string as NSString).length {
-            layoutManager?.removeTemporaryAttribute(.backgroundColor, forCharacterRange: highlighted)
+        showLinkedSelection(selection(at: selectedRange().location))
+    }
+
+    func selection(at position: Int) -> URLSelection? {
+        guard editedStart == nil, !needsFullHighlight else { return nil }
+        return index.selection(at: position, in: string)
+    }
+
+    func showLinkedSelection(_ selection: URLSelection?, scroll: Bool = false) {
+        let length = (string as NSString).length
+        if let highlighted, highlighted.location < length {
+            layoutManager?.removeTemporaryAttribute(.backgroundColor, forCharacterRange: NSIntersectionRange(highlighted, NSRange(location: 0, length: length)))
         }
         highlighted = nil
-        guard let field = index.field(at: selectedRange().location), NSMaxRange(field.range) <= (string as NSString).length else { return }
+        highlightLinkedRanges([])
+        guard editedStart == nil, !needsFullHighlight,
+              let selection, let range = index.range(for: selection, in: string),
+              NSMaxRange(range) <= length, let field = index.field(at: range.location) else { return }
         highlighted = field.range
         layoutManager?.addTemporaryAttribute(.backgroundColor, value: Self.pairColor, forCharacterRange: field.range)
+        highlightLinkedRanges([range], scroll: scroll)
+    }
+
+    override func didInteract(at position: Int? = nil) {
+        refreshSelectionHighlight()
+        super.didInteract(at: position)
     }
 
     override func mouseDown(with event: NSEvent) {
         if !event.modifierFlags.contains(.shift), !event.modifierFlags.contains(.command) {
-            let position = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+            let position = clickedCharacterIndex(for: event)
             if let field = index.field(at: position), NSLocationInRange(position, field.key) {
                 window?.makeFirstResponder(self)
                 setSelectedRange(JSONIndex.contentRange(field.key, in: string))
-                refreshSelectionHighlight()
+                didInteract(at: position)
                 return
             }
         }
         super.mouseDown(with: event)
-        refreshSelectionHighlight()
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
-        let position = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        let position = clickedCharacterIndex(for: event)
         guard let field = index.field(at: position),
               NSLocationInRange(position, field.key) || NSLocationInRange(position, field.value) else {
             menuTarget = nil
@@ -123,7 +141,7 @@ final class JSONTextView: EditorTextView, NSTextStorageDelegate {
         menuTarget = (field, key)
         window?.makeFirstResponder(self)
         setSelectedRange(JSONIndex.contentRange(key ? field.key : field.value, in: string))
-        refreshSelectionHighlight()
+        didInteract(at: position)
         let menu = NSMenu()
         menu.allowsContextMenuPlugIns = false
         let copy = menu.addItem(withTitle: key ? "复制 Key" : "复制 Value", action: #selector(copyToken), keyEquivalent: "")

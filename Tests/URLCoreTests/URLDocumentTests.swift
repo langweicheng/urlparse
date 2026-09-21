@@ -69,6 +69,45 @@ final class URLDocumentTests: XCTestCase {
         let emptyQuery = try URLDocument("file:///tmp/a?#f")
         XCTAssertEqual(try emptyQuery.applying(component: .path, value: "/tmp/b"), "file:///tmp/b?#f")
     }
+    func testHashParsingKeepsRawFragmentSeparateFromQuery() throws {
+        for hash in ["", "#", "#section", "#/route?tab=one&name=%E4%B8%AD%E6%96%87#detail", "#中文😀"] {
+            let d = try URLDocument("custom://host/path?keep=%2f" + hash)
+            XCTAssertEqual(d.hash, hash)
+            let json = try JSONSerialization.jsonObject(with: Data(d.json.utf8)) as! [String: String]
+            XCTAssertEqual(json, ["keep": "/"])
+            XCTAssertEqual(try d.applying(json: d.json), d.original)
+        }
+        let hashOnly = try URLDocument("custom:hello#?x=1&y=2")
+        XCTAssertEqual(hashOnly.hash, "#?x=1&y=2")
+        XCTAssertTrue(hashOnly.items.isEmpty)
+    }
+    func testHashEditingPreservesUntouchedURLBytes() throws {
+        let base = "CUSTOM://user:p%40ss@old.example:8443/城😀/%2fb?x=%2f&x=two+words&flag"
+        for hash in ["", "#", "#old?x=1#detail"] {
+            let d = try URLDocument(base + hash)
+            for value in ["#new", "new"] {
+                XCTAssertEqual(try d.applying(component: .hash, value: value), base + "#new")
+            }
+            XCTAssertEqual(try d.applying(component: .hash, value: ""), base)
+            XCTAssertEqual(try d.applying(component: .hash, value: "#"), base + "#")
+        }
+        let emptyQuery = try URLDocument("file:///tmp/a?#old")
+        XCTAssertEqual(try emptyQuery.applying(component: .hash, value: "new"), "file:///tmp/a?#new")
+        XCTAssertEqual(try emptyQuery.applying(component: .hash, value: ""), "file:///tmp/a?")
+        XCTAssertEqual(try URLDocument("custom:hello").applying(component: .hash, value: "section"), "custom:hello#section")
+    }
+    func testHashEncodingAndValidation() throws {
+        let d = try URLDocument("https://host/path?x=%252F#old")
+        let changed = try d.applying(component: .hash, value: "#/中文 a?tab=one&next=%2f+%252F#detail")
+        XCTAssertEqual(changed, "https://host/path?x=%252F#/%E4%B8%AD%E6%96%87%20a?tab=one&next=%2f+%252F#detail")
+        let parsed = try URLDocument(changed)
+        XCTAssertEqual(parsed.hash, "#/%E4%B8%AD%E6%96%87%20a?tab=one&next=%2f+%252F#detail")
+        XCTAssertEqual(parsed.json, d.json)
+        XCTAssertEqual(try parsed.applying(component: .hash, value: parsed.hash), changed)
+        for hash in ["#bad%", "%2", "#bad%ZZ", "#%FF"] {
+            XCTAssertThrowsError(try d.applying(component: .hash, value: hash), hash)
+        }
+    }
     func testLargeURLRoundTrip() throws {
         let url = "imeituan://host/mrn?" + (0..<1000).map { "key\($0)=value%20\($0)" }.joined(separator: "&")
         let d = try URLDocument(url)

@@ -10,6 +10,8 @@ A native macOS URL parameter editor for development and debugging. Edit a URL on
 
 - **Two-way editing**: paste a URL to see formatted JSON; edit the JSON to update the URL. Incomplete or invalid JSON shows an error and keeps the last valid URL.
 - **Quick key/value actions**: click a key to select its name and highlight the matching key/value pair. Right-click to copy or delete a key or value. Deleting a key removes the parameter; deleting a value replaces it with an empty string.
+- **Linked highlighting (source build)**: click a JSON key/value or a scheme, host, path, or hash field to highlight its original URL text. Click part of the URL to highlight and reveal the matching field. Repeated parameters map to individual array elements without moving input focus or changing text.
+- **Hash parsing and editing (source build)**: a separate field shows the full fragment starting with `#`, including anchors and routes such as `#/route?tab=info`. A leading `#` is optional when editing; clearing the field removes the fragment, while `#` preserves an empty fragment. Query-like content inside the hash stays separate from Query JSON.
 - **Native editing shortcuts**: copy, paste, cut, select all, undo, and redo. Undo and redo restore both editors together.
 - **Split view and colors**: starts at 50:50 and remembers your divider position. JSON uses IDEA Light colors.
 - **Offline QR codes**: generate a QR code for the current URL with one click. URLs exceeding QR capacity show an error.
@@ -48,7 +50,7 @@ These figures use `TASK_VM_INFO.phys_footprint`, not RSS, and are not memory lim
 
 [Raw results before optimization](docs/memory-before.txt) · [Raw results after optimization](docs/memory-after.txt). Run `./scripts/measure-memory.sh` to repeat the measurements.
 
-The current development source also supports editing the scheme, host, and path, including creating a URL from empty fields. It adds a flat toolbar and incremental text and syntax updates. The universal app is approximately 0.74 MiB; see the [measurement report (Chinese)](docs/optimization-2026-09-20.md) for timings and limitations. These changes are not included in the v1.0.0 download yet; build from source to use them.
+The current development source also supports editing the scheme, host, path, and hash, including creating a URL from empty fields. It adds a flat toolbar and incremental text and syntax updates. The universal app is approximately 0.74 MiB; see the [measurement report (Chinese)](docs/optimization-2026-09-20.md) for timings and limitations. These changes are not included in the v1.0.0 download yet; build from source to use them.
 
 ## Installation
 
